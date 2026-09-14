@@ -49,6 +49,7 @@ if sys.stderr and hasattr(sys.stderr, "reconfigure"):
 
 BASE_URL = "https://www.hackerearth.com"
 CHALLENGES_URL = "https://www.hackerearth.com/challenges/"
+UPCOMING_API_URL = "https://www.hackerearth.com/api/events/upcoming/"
 COMPETE_API_URL = "https://www.hackerearth.com/api/community/challenges/compete/"
 EVENT_API_BASE = "https://www.hackerearth.com/challengesapp/api/events/"
 
@@ -830,40 +831,81 @@ def scrape_challenges() -> List[Dict[str, Any]]:
     """
     logger.info("Initializing HackerEarth Challenges scraping via Scrapling...")
 
-    # 1. Verify live portal using StealthyFetcher if available
+    # 1. Verify live challenges portal
     logger.info("Verifying live challenges portal: %s", CHALLENGES_URL)
-    if StealthyFetcher is not None:
-        try:
-            page = StealthyFetcher.fetch(CHALLENGES_URL, headless=True)
-            logger.info("Portal response status: %s (Page title: '%s')", page.status, page.css("title::text").get())
-        except Exception as e:
-            logger.warning(f"StealthyFetcher portal preview warning: {e}. Continuing with direct Fetcher...")
-    else:
-        logger.info("StealthyFetcher engine not active. Continuing with direct Fetcher...")
 
-    # 2. Fetch the structured challenges catalogue via Fetcher
-    logger.info("Fetching challenges list from API: %s", COMPETE_API_URL)
-    response = Fetcher.get(COMPETE_API_URL)
-    if response.status != 200:
-        logger.error(f"Failed to fetch challenges API. Status: {response.status}")
-        sys.exit(1)
+    # 2. Fetch structured challenges catalogue from public upcoming events API (primary source)
+    challenges_list = []
+    total_count = 0
+    last_status = None
 
+    logger.info("Fetching challenges list from public events API: %s", UPCOMING_API_URL)
     try:
-        raw_data = json.loads(response.body)
-        challenges_list = raw_data.get("data", [])
-        total_count = raw_data.get("total", len(challenges_list))
+        response = Fetcher.get(
+            UPCOMING_API_URL,
+            headers={
+                "Accept": "application/json, text/plain, */*",
+                "Referer": CHALLENGES_URL,
+            },
+        )
+        last_status = response.status
+        if response.status == 200:
+            raw_data = json.loads(response.body)
+            challenges_list = raw_data.get("response", [])
+            total_count = len(challenges_list)
+            logger.info(f"Retrieved {len(challenges_list)} challenges from public events API.")
+        elif response.status == 403:
+            logger.warning(f"[HackerEarth] Public events API returned HTTP 403 Forbidden. Trying fallback...")
+        else:
+            logger.warning(f"[HackerEarth] Public events API returned HTTP {response.status}. Trying fallback...")
     except Exception as e:
-        logger.error(f"Failed to parse challenges JSON: {e}")
-        sys.exit(1)
+        logger.warning(f"[HackerEarth] Error accessing public events API: {e}. Trying fallback...")
 
-    logger.info(f"Retrieved {len(challenges_list)} challenges from portal index (reported total: {total_count}).")
+    # Fallback to compete API if public events API returned no data
+    if not challenges_list:
+        logger.info("Attempting fallback challenges API: %s", COMPETE_API_URL)
+        try:
+            response = Fetcher.get(
+                COMPETE_API_URL,
+                headers={
+                    "Accept": "application/json, text/plain, */*",
+                    "Referer": CHALLENGES_URL,
+                },
+            )
+            last_status = response.status
+            if response.status == 200:
+                raw_data = json.loads(response.body)
+                challenges_list = raw_data.get("data", [])
+                total_count = raw_data.get("total", len(challenges_list))
+                logger.info(f"Retrieved {len(challenges_list)} challenges from compete API fallback.")
+            elif response.status == 403:
+                logger.error(f"[HackerEarth] Access Forbidden (HTTP 403) on challenges API.")
+                raise RuntimeError("HackerEarth challenge catalogue endpoint returned HTTP 403 Forbidden")
+            else:
+                logger.error(f"[HackerEarth] Failed to fetch challenges API. Status: {response.status}")
+                raise RuntimeError(f"HackerEarth challenge catalogue endpoint returned HTTP {response.status}")
+        except RuntimeError:
+            raise
+        except Exception as exc:
+            logger.error(f"[HackerEarth] Error fetching fallback challenges API: {exc}")
+            raise RuntimeError(f"Failed to fetch HackerEarth challenges catalogue: {exc}")
 
     # Filter strictly for Ongoing and Upcoming challenges
     active_challenges = []
     skipped_past_count = 0
 
     for item in challenges_list:
-        status = determine_status(item.get("start"), item.get("end"))
+        raw_status = str(item.get("status") or "").strip().upper()
+        if "ONGOING" in raw_status:
+            status = "Ongoing"
+        elif "UPCOMING" in raw_status:
+            status = "Upcoming"
+        else:
+            status = determine_status(
+                item.get("start") or item.get("start_tz"),
+                item.get("end") or item.get("end_tz"),
+            )
+
         if status in ("Ongoing", "Upcoming"):
             active_challenges.append((item, status))
         else:
@@ -878,18 +920,18 @@ def scrape_challenges() -> List[Dict[str, Any]]:
 
     # 3. For each Ongoing / Upcoming challenge, extract full event details
     for i, (item, calculated_status) in enumerate(active_challenges, 1):
-        slug = item.get("slug")
-        title = clean_text(item.get("title"))
-        challenge_type = clean_text(item.get("type"))
-        start_time = item.get("start")
-        start_formatted = item.get("start_str")
-        end_time = item.get("end")
-        end_formatted = item.get("end_str")
         raw_url = item.get("url")
         full_url = normalize_url(raw_url)
+        slug = item.get("slug") or (raw_url.rstrip("/").split("/")[-1] if raw_url else None)
+        title = clean_text(item.get("title"))
+        challenge_type = clean_text(item.get("type") or item.get("challenge_type"))
+        start_time = item.get("start") or item.get("start_tz")
+        start_formatted = item.get("start_str") or item.get("date")
+        end_time = item.get("end") or item.get("end_tz")
+        end_formatted = item.get("end_str") or item.get("end_date")
         company_name = clean_text(item.get("company_name"))
-        image_url = item.get("image_url")
-        listing_image = item.get("listing_image")
+        image_url = item.get("image_url") or item.get("thumbnail")
+        listing_image = item.get("listing_image") or item.get("thumbnail")
         min_team = item.get("min_team_size")
         max_team = item.get("max_team_size")
         subs_count = item.get("subscription_count")

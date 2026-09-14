@@ -1,0 +1,46 @@
+name: Daily Hackathon Scraper
+
+on:
+  schedule:
+    - cron: '30 18 * * *'
+      timezone: 'Asia/Kolkata'
+  workflow_dispatch:
+
+jobs:
+  scrape-and-sync:
+    name: Scrape All 5 Platforms and Sync to Supabase
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run Production Hackathon Scraper Pipeline
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          SUPABASE_TABLE: ${{ secrets.SUPABASE_TABLE }}
+          PYTHONUNBUFFERED: "1"
+        run: |
+          python main.py
+
+      - name: Upload Scraped Artifacts (JSON & CSV)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scraped-hackathons-${{ github.run_id }}
+          path: data/
+          if-no-files-found: ignore
+          retention-days: 14

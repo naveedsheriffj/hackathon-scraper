@@ -85,8 +85,11 @@ def run_unstop(limit: Optional[int] = None) -> List[Dict[str, Any]]:
 
     if loop.is_running():
         # In case we're inside an active event loop
-        import nest_asyncio
-        nest_asyncio.apply()
+        try:
+            import nest_asyncio
+            nest_asyncio.apply()
+        except ImportError:
+            pass
 
     records = asyncio.run(scrape_hackathons(limit=limit))
     return records
@@ -151,6 +154,16 @@ def main() -> None:
 
     # Load environment variables
     load_env()
+
+    # Pre-flight credential check when Supabase sync is enabled
+    if args.sync_supabase:
+        url, key, _ = get_supabase_credentials()
+        if not url or not key:
+            logger.error(
+                "[CONFIG ERROR] Supabase synchronization is enabled, but SUPABASE_URL "
+                "or SUPABASE_KEY is missing from environment variables."
+            )
+            sys.exit(1)
 
     print_banner()
 
@@ -224,6 +237,16 @@ def main() -> None:
 
     # Print formatted summary table
     print_summary_table(execution_results)
+
+    # Fatal check: Only fail if EVERY requested platform encountered an execution error (status == "FAILED").
+    # A successful scrape that returns 0 hackathons (status == "SUCCESS") must NOT cause failure.
+    all_crashed = bool(execution_results) and all(r.get("status") == "FAILED" for r in execution_results)
+    if all_crashed:
+        logger.error(
+            "[FATAL ERROR] All %d scraping platform(s) encountered execution errors during this run.",
+            len(execution_results),
+        )
+        sys.exit(1)
 
 
 if __name__ == "__main__":

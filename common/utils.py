@@ -6,7 +6,7 @@ Ensures credentials are never printed to terminal or log outputs.
 import logging
 import os
 import sys
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 
 def setup_logging(level: int = logging.INFO) -> logging.Logger:

@@ -26,8 +26,12 @@ from urllib.parse import urljoin, urlparse
 
 from scrapling import Fetcher
 
-# Configure stdout encoding for Windows console compatibility
-sys.stdout.reconfigure(encoding='utf-8')
+# Configure stdout encoding for cross-platform console compatibility
+if sys.stdout and hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
 
 # Set up logging
 logging.basicConfig(

@@ -1,0 +1,15 @@
+[project]
+name = "devfolio-scraper"
+version = "0.1.0"
+description = "Web scraper to extract hackathon details from Devfolio using Scrapling"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "scrapling[all]>=0.4.15",
+    "supabase>=2.0.0",
+    "python-dotenv>=1.0.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
